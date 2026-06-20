@@ -1,47 +1,55 @@
 import { useState, useRef, useCallback } from 'react'
 import { Upload, ImagePlus, AlertCircle } from 'lucide-react'
-import { useAppStore } from '@/store/useAppStore'
+import { useBatchStore } from '@/store/useBatchStore'
 
 const MAX_SIZE = 20 * 1024 * 1024
 const ACCEPTED = ['image/jpeg', 'image/png', 'image/webp']
+const MAX_IMAGES = 20
 
 export default function ImageUploader() {
   const [isDragging, setIsDragging] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const setImage = useAppStore((s) => s.setImage)
-  const storeSetError = useAppStore((s) => s.setError)
+  const images = useBatchStore((s) => s.images)
+  const addImages = useBatchStore((s) => s.addImages)
 
-  const processFile = useCallback((file: File) => {
+  if (images.length > 0) {
+    return null
+  }
+
+  const validateFiles = useCallback((files: File[]): { valid: File[]; error: string | null } => {
+    const validFiles: File[] = []
+
+    for (const file of files) {
+      if (!ACCEPTED.includes(file.type)) {
+        return { valid: [], error: '请上传 JPG、PNG 或 WebP 格式的图片' }
+      }
+      if (file.size > MAX_SIZE) {
+        return { valid: [], error: '图片大小不能超过 20MB' }
+      }
+      validFiles.push(file)
+    }
+
+    if (validFiles.length + images.length > MAX_IMAGES) {
+      return { valid: [], error: `最多支持 ${MAX_IMAGES} 张图片` }
+    }
+
+    return { valid: validFiles, error: null }
+  }, [images.length])
+
+  const processFiles = useCallback((files: File[]) => {
     setError(null)
-    storeSetError(null)
 
-    if (!ACCEPTED.includes(file.type)) {
-      setError('请上传 JPG、PNG 或 WebP 格式的图片')
-      return
-    }
-    if (file.size > MAX_SIZE) {
-      setError('图片大小不能超过 20MB')
+    const { valid, error: validationError } = validateFiles(files)
+    if (validationError) {
+      setError(validationError)
       return
     }
 
-    const img = new Image()
-    img.onload = () => {
-      const canvas = document.createElement('canvas')
-      canvas.width = img.width
-      canvas.height = img.height
-      const ctx = canvas.getContext('2d')!
-      ctx.drawImage(img, 0, 0)
-      const imageData = ctx.getImageData(0, 0, img.width, img.height)
-      setImage(img, imageData)
-      URL.revokeObjectURL(img.src)
+    if (valid.length > 0) {
+      addImages(valid)
     }
-    img.onerror = () => {
-      setError('图片加载失败，请重试')
-      URL.revokeObjectURL(img.src)
-    }
-    img.src = URL.createObjectURL(file)
-  }, [setImage, storeSetError])
+  }, [addImages, validateFiles])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -60,19 +68,19 @@ export default function ImageUploader() {
     e.stopPropagation()
     setIsDragging(false)
 
-    const file = e.dataTransfer.files[0]
-    if (file) {
-      processFile(file)
+    const files = Array.from(e.dataTransfer.files)
+    if (files.length > 0) {
+      processFiles(files)
     }
-  }, [processFile])
+  }, [processFiles])
 
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) {
-      processFile(file)
+    const files = e.target.files ? Array.from(e.target.files) : []
+    if (files.length > 0) {
+      processFiles(files)
     }
     e.target.value = ''
-  }, [processFile])
+  }, [processFiles])
 
   return (
     <div className="flex flex-col items-center justify-center h-full w-full p-8">
@@ -92,6 +100,7 @@ export default function ImageUploader() {
         <input
           ref={fileInputRef}
           type="file"
+          multiple
           accept={ACCEPTED.join(',')}
           className="hidden"
           onChange={handleFileChange}
@@ -107,7 +116,7 @@ export default function ImageUploader() {
           {isDragging ? '释放以上传图片' : '拖拽图片到此处'}
         </p>
         <p className="font-body text-sm text-brand-text-dim">
-          或点击选择文件 · 支持 JPG / PNG / WebP · 最大 20MB
+          或点击选择文件 · 支持批量上传，最多 {MAX_IMAGES} 张 · JPG / PNG / WebP · 单张最大 20MB
         </p>
       </div>
 

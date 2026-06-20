@@ -134,7 +134,8 @@ export class EdgeDetector {
         clearTimeout(timeoutId);
         this.worker.removeEventListener('message', onMessage);
         this.worker.removeEventListener('error', onError);
-        reject(err);
+        const msg = err.message || err.error?.message || '边缘检测 Worker 错误';
+        reject(new Error(msg));
       };
 
       this.worker.addEventListener('message', onMessage);

@@ -1,15 +1,20 @@
-let wasmInstance: any = null;
+let wasmInstance: any = null
+let wasmLoadAttempted = false
 
-try {
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
-  const wasmModule = await import('/wasm-edge-detect/edge_detect.js');
-  if (wasmModule?.default?.initialize) {
-    await wasmModule.default.initialize();
-    wasmInstance = wasmModule.default;
+async function loadWasm(): Promise<any> {
+  if (wasmLoadAttempted) return wasmInstance
+  wasmLoadAttempted = true
+
+  try {
+    const wasmModule = await import('@/wasm/wasm-stub')
+    if (wasmModule?.default?.initialize) {
+      await wasmModule.default.initialize()
+      wasmInstance = wasmModule.default
+    }
+  } catch {
+    wasmInstance = null
   }
-} catch {
-  wasmInstance = null;
+  return wasmInstance
 }
 
 const Gx = [
@@ -90,7 +95,7 @@ interface StructuredSerializeOptions {
 
 export {};
 
-self.onmessage = (event: MessageEvent) => {
+self.onmessage = async (event: MessageEvent) => {
   const { type, imageData, width, height, threshold } = event.data;
 
   if (type !== 'detect') return;
@@ -101,9 +106,10 @@ self.onmessage = (event: MessageEvent) => {
       return;
     }
 
-    if (wasmInstance && typeof wasmInstance.detect_edges_to_rgba === 'function') {
+    const wasm = await loadWasm();
+    if (wasm && typeof wasm.detect_edges_to_rgba === 'function') {
       try {
-        const rgba = wasmInstance.detect_edges_to_rgba(
+        const rgba = wasm.detect_edges_to_rgba(
           new Uint8Array(imageData),
           width,
           height,
@@ -123,7 +129,7 @@ self.onmessage = (event: MessageEvent) => {
         );
         return;
       } catch {
-        // fall through
+        // fall through to JS implementation
       }
     }
 

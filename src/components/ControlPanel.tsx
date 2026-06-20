@@ -1,146 +1,95 @@
-import { useCallback } from 'react'
-import { Eye, EyeOff, RefreshCw, Scissors, RotateCcw, Loader2, Download, Crop, Settings2 } from 'lucide-react'
-import { useAppStore } from '@/store/useAppStore'
+import { useCallback, useMemo } from 'react'
+import { Eye, EyeOff, RefreshCw, Scissors, RotateCcw, Loader2, Download, Settings2, ChevronLeft, ChevronRight, Layers } from 'lucide-react'
+import { useBatchStore } from '@/store/useBatchStore'
 
 export default function ControlPanel() {
-  const status = useAppStore((s) => s.status)
-  const sensitivity = useAppStore((s) => s.sensitivity)
-  const showEdges = useAppStore((s) => s.showEdges)
-  const cropRect = useAppStore((s) => s.cropRect)
-  const resultImage = useAppStore((s) => s.resultImage)
-  const originalImage = useAppStore((s) => s.originalImage)
+  const images = useBatchStore((s) => s.images)
+  const activeImageId = useBatchStore((s) => s.activeImageId)
+  const setActiveImage = useBatchStore((s) => s.setActiveImage)
+  const setSensitivity = useBatchStore((s) => s.setSensitivity)
+  const toggleEdges = useBatchStore((s) => s.toggleEdges)
+  const triggerRedetect = useBatchStore((s) => s.triggerRedetect)
+  const startMattingSingle = useBatchStore((s) => s.startMattingSingle)
+  const reset = useBatchStore((s) => s.reset)
+  const getProgress = useBatchStore((s) => s.getProgress)
 
-  const setSensitivity = useAppStore((s) => s.setSensitivity)
-  const toggleEdges = useAppStore((s) => s.toggleEdges)
-  const triggerRedetect = useAppStore((s) => s.triggerRedetect)
-  const setResultImage = useAppStore((s) => s.setResultImage)
-  const reset = useAppStore((s) => s.reset)
-  const setError = useAppStore((s) => s.setError)
+  const activeImage = useMemo(
+    () => images.find((img) => img.id === activeImageId) ?? null,
+    [images, activeImageId]
+  )
 
-  const handleMatting = useCallback(async () => {
-    if (!originalImage || !cropRect) return
+  const progress = useMemo(() => getProgress(), [images, getProgress])
 
-    useAppStore.getState().setStatus('matting')
+  const currentIndex = useMemo(() => {
+    if (!activeImageId) return -1
+    return images.findIndex((img) => img.id === activeImageId)
+  }, [images, activeImageId])
 
-    const validatePng = (buffer: Uint8Array): boolean => {
-      if (buffer.length < 12) return false
-      const signature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
-      for (let i = 0; i < signature.length; i++) {
-        if (buffer[i] !== signature[i]) return false
-      }
-      const iendSig = [0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82]
-      const end = buffer.slice(buffer.length - 8, buffer.length)
-      for (let i = 0; i < iendSig.length; i++) {
-        if (end[i] !== iendSig[i]) return false
-      }
-      return true
+  const hasMultiple = images.length > 1
+  const canGoPrev = currentIndex > 0
+  const canGoNext = currentIndex >= 0 && currentIndex < images.length - 1
+
+  const handlePrev = useCallback(() => {
+    if (canGoPrev) {
+      setActiveImage(images[currentIndex - 1].id)
     }
+  }, [canGoPrev, images, currentIndex, setActiveImage])
 
-    const getPngBytes = async (): Promise<Uint8Array> => {
-      const maxAttempts = 3
-      let lastError: Error | null = null
-
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-          const canvas = document.createElement('canvas')
-          canvas.width = Math.max(1, Math.round(cropRect.width))
-          canvas.height = Math.max(1, Math.round(cropRect.height))
-          const ctx = canvas.getContext('2d')!
-          ctx.drawImage(
-            originalImage,
-            cropRect.x, cropRect.y, cropRect.width, cropRect.height,
-            0, 0, canvas.width, canvas.height,
-          )
-
-          const dataUrl = canvas.toDataURL('image/png')
-          const base64 = dataUrl.split(',')[1]
-          const binary = atob(base64)
-          const bytes = new Uint8Array(binary.length)
-          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-
-          if (bytes.length < 100) {
-            throw new Error(`PNG 编码失败 (${bytes.length} bytes)`)
-          }
-          if (!validatePng(bytes)) {
-            throw new Error('PNG 完整性校验失败')
-          }
-
-          return bytes
-        } catch (e) {
-          lastError = e as Error
-          if (attempt < maxAttempts) {
-            await new Promise((r) => setTimeout(r, 100 * attempt))
-          }
-        }
-      }
-
-      throw lastError || new Error('PNG 编码失败')
+  const handleNext = useCallback(() => {
+    if (canGoNext) {
+      setActiveImage(images[currentIndex + 1].id)
     }
+  }, [canGoNext, images, currentIndex, setActiveImage])
 
-    try {
-      const pngBytes = await getPngBytes()
-
-      let lastResponseError: Error | null = null
-      const maxAttempts = 2
-
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-          const blob = new Blob([pngBytes], { type: 'image/png' })
-          const formData = new FormData()
-          formData.append('image', blob, 'crop.png')
-
-          const response = await fetch('/api/matting', {
-            method: 'POST',
-            body: formData,
-          })
-
-          if (!response.ok) {
-            const err = await response.json()
-            throw new Error(err.message || `抠图失败 (HTTP ${response.status})`)
-          }
-
-          const resultBlob = await response.blob()
-          const resultBuf = new Uint8Array(await resultBlob.arrayBuffer())
-
-          if (resultBlob.size === 0 || !validatePng(resultBuf)) {
-            throw new Error('后端返回的 PNG 数据不完整')
-          }
-
-          const finalBlob = new Blob([resultBuf], { type: 'image/png' })
-          const url = URL.createObjectURL(finalBlob)
-          setResultImage(url)
-          return
-        } catch (e) {
-          lastResponseError = e as Error
-          if (attempt < maxAttempts) {
-            await new Promise((r) => setTimeout(r, 150 * attempt))
-          }
-        }
-      }
-
-      throw lastResponseError || new Error('抠图请求失败')
-    } catch (err) {
-      setError((err as Error).message || '抠图失败')
-    }
-  }, [originalImage, cropRect, setResultImage, setError])
+  const handleMatting = useCallback(() => {
+    if (!activeImage || activeImage.status !== 'adjusting') return
+    startMattingSingle(activeImage.id)
+  }, [activeImage, startMattingSingle])
 
   const handleDownload = useCallback(() => {
-    if (!resultImage) return
+    if (!activeImage?.resultImage) return
     const a = document.createElement('a')
-    a.href = resultImage
-    a.download = 'cutout-result.png'
+    a.href = activeImage.resultImage
+    const baseName = activeImage.file.name.replace(/\.[^/.]+$/, '')
+    a.download = `${baseName}_matting.png`
     a.click()
-  }, [resultImage])
+  }, [activeImage])
 
   const handleRedetect = useCallback(() => {
-    triggerRedetect()
-  }, [triggerRedetect])
+    if (!activeImage) return
+    triggerRedetect(activeImage.id)
+  }, [activeImage, triggerRedetect])
 
-  const isIdle = status === 'idle'
-  const isDetecting = status === 'detecting'
-  const isAdjusting = status === 'adjusting'
-  const isMatting = status === 'matting'
-  const isDone = status === 'done'
+  const handleSensitivityChange = useCallback(
+    (val: number) => {
+      if (!activeImage) return
+      setSensitivity(val, activeImage.id)
+    },
+    [activeImage, setSensitivity]
+  )
+
+  const handleToggleEdges = useCallback(() => {
+    if (!activeImage) return
+    toggleEdges(activeImage.id)
+  }, [activeImage, toggleEdges])
+
+  const isIdle = !activeImage
+  const isDetecting = !!(activeImage && (
+    activeImage.status === 'detecting' ||
+    (activeImage.status === 'queued' && !activeImage.cropRect)
+  ))
+  const isAdjusting = activeImage?.status === 'adjusting'
+  const isMatting = !!(activeImage && (
+    activeImage.status === 'matting' ||
+    (activeImage.status === 'queued' && activeImage.cropRect)
+  ))
+  const isDone = activeImage?.status === 'done'
+  const isError = activeImage?.status === 'error'
+
+  const sensitivity = activeImage?.sensitivity ?? 50
+  const showEdges = activeImage?.showEdges ?? true
+  const cropRect = activeImage?.cropRect ?? null
+  const resultImage = activeImage?.resultImage ?? null
 
   return (
     <div className="w-72 h-full bg-brand-surface border-l border-brand-border flex flex-col">
@@ -151,11 +100,60 @@ export default function ControlPanel() {
         </h2>
       </div>
 
+      {hasMultiple && (
+        <div className="px-5 py-3 border-b border-brand-border">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-brand-text-dim flex items-center gap-1.5">
+              <Layers className="w-3.5 h-3.5" />
+              批量处理
+            </span>
+            <span className="text-xs text-brand-text font-medium">
+              {currentIndex + 1} / {images.length}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handlePrev}
+              disabled={!canGoPrev}
+              className="flex-1 flex items-center justify-center gap-1 px-3 py-2 rounded-lg bg-brand-bg border border-brand-border text-sm text-brand-text hover:border-brand-accent/50 hover:text-brand-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              上一张
+            </button>
+            <button
+              onClick={handleNext}
+              disabled={!canGoNext}
+              className="flex-1 flex items-center justify-center gap-1 px-3 py-2 rounded-lg bg-brand-bg border border-brand-border text-sm text-brand-text hover:border-brand-accent/50 hover:text-brand-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              下一张
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="mt-2.5 space-y-1">
+            <div className="flex items-center justify-between text-xs text-brand-text-dim">
+              <span>整体进度</span>
+              <span className="text-brand-text font-medium">
+                {progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0}%
+              </span>
+            </div>
+            <div className="w-full h-1.5 bg-brand-muted rounded-full overflow-hidden">
+              <div
+                className="h-full bg-brand-accent transition-all duration-300 ease-out"
+                style={{ width: `${progress.total > 0 ? (progress.done / progress.total) * 100 : 0}%` }}
+              />
+            </div>
+            <div className="text-xs text-brand-text-dim">
+              {progress.done} 完成 · {progress.active} 进行中 · {progress.total - progress.done - progress.failed - progress.active} 等待
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-6">
         <div className="space-y-3">
           <StepIndicator step={1} label="上传图片" done={!isIdle} active={isIdle} />
-          <StepIndicator step={2} label="边缘检测" done={isAdjusting || isMatting || isDone} active={isDetecting} />
-          <StepIndicator step={3} label="调整裁剪" done={isMatting || isDone} active={isAdjusting} />
+          <StepIndicator step={2} label="边缘检测" done={isAdjusting || isMatting || isDone || isError} active={isDetecting} />
+          <StepIndicator step={3} label="调整裁剪" done={isMatting || isDone || isError} active={isAdjusting} />
           <StepIndicator step={4} label="AI 抠图" done={isDone} active={isMatting} />
         </div>
 
@@ -170,7 +168,7 @@ export default function ControlPanel() {
               min={5}
               max={100}
               value={sensitivity}
-              onChange={(e) => setSensitivity(Number(e.target.value))}
+              onChange={(e) => handleSensitivityChange(Number(e.target.value))}
               className="w-full h-1.5 bg-brand-muted rounded-full appearance-none cursor-pointer
                 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
                 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-brand-accent
@@ -182,7 +180,7 @@ export default function ControlPanel() {
 
         {(isAdjusting || isDone) && (
           <button
-            onClick={toggleEdges}
+            onClick={handleToggleEdges}
             className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg bg-brand-bg border border-brand-border text-sm text-brand-text hover:border-brand-accent/50 transition-colors"
           >
             <span className="flex items-center gap-2">
@@ -231,7 +229,14 @@ export default function ControlPanel() {
         {isMatting && (
           <div className="flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-brand-accent/10 border border-brand-accent/30 text-brand-accent text-sm">
             <Loader2 className="w-4 h-4 animate-spin" />
-            AI 正在抠图...
+            {activeImage?.status === 'queued' ? '等待抠图...' : 'AI 正在抠图...'}
+          </div>
+        )}
+
+        {isError && activeImage?.errorMessage && (
+          <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+            <div className="font-medium mb-1">处理失败</div>
+            <div className="text-red-300/80">{activeImage.errorMessage}</div>
           </div>
         )}
 

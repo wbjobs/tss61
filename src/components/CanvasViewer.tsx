@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { useAppStore } from '@/store/useAppStore'
-import { EdgeDetector } from '@/wasm/edgeDetector'
+import { useBatchStore } from '@/store/useBatchStore'
 
 type DragMode = 'none' | 'move' | 'nw' | 'ne' | 'sw' | 'se' | 'n' | 's' | 'e' | 'w'
 
@@ -14,21 +13,11 @@ interface DisplayRect {
 export default function CanvasViewer() {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const edgeDetectorRef = useRef<EdgeDetector | null>(null)
 
-  const originalImage = useAppStore((s) => s.originalImage)
-  const originalImageData = useAppStore((s) => s.originalImageData)
-  const edgeRgba = useAppStore((s) => s.edgeRgba)
-  const cropRect = useAppStore((s) => s.cropRect)
-  const showEdges = useAppStore((s) => s.showEdges)
-  const sensitivity = useAppStore((s) => s.sensitivity)
-  const detectTrigger = useAppStore((s) => s.detectTrigger)
-  const status = useAppStore((s) => s.status)
-
-  const setEdgeResult = useAppStore((s) => s.setEdgeResult)
-  const setCropRect = useAppStore((s) => s.setCropRect)
-  const setStatus = useAppStore((s) => s.setStatus)
-  const setError = useAppStore((s) => s.setError)
+  const activeImage = useBatchStore((s) =>
+    s.images.find((img) => img.id === s.activeImageId) ?? null
+  )
+  const setCropRect = useBatchStore((s) => s.setCropRect)
 
   const [displayScale, setDisplayScale] = useState(1)
   const [imageOffset, setImageOffset] = useState({ x: 0, y: 0 })
@@ -50,8 +39,8 @@ export default function CanvasViewer() {
   })
 
   const getHandleAtPoint = (displayX: number, displayY: number): DragMode => {
-    if (!cropRect) return 'none'
-    const d = toDisplayRect(cropRect)
+    if (!activeImage?.cropRect) return 'none'
+    const d = toDisplayRect(activeImage.cropRect)
     const handleSize = 16
 
     const handles: [DragMode, number, number][] = [
@@ -84,13 +73,13 @@ export default function CanvasViewer() {
   }
 
   useEffect(() => {
-    if (!originalImage || !containerRef.current) return
+    if (!activeImage?.imageElement || !containerRef.current) return
 
     const container = containerRef.current
     const containerW = container.clientWidth
     const containerH = container.clientHeight
-    const imgW = originalImage.width
-    const imgH = originalImage.height
+    const imgW = activeImage.imageElement.width
+    const imgH = activeImage.imageElement.height
 
     const scale = Math.min(containerW / imgW, containerH / imgH, 1)
     const displayW = imgW * scale
@@ -100,81 +89,11 @@ export default function CanvasViewer() {
 
     setDisplayScale(scale)
     setImageOffset({ x: offsetX, y: offsetY })
-  }, [originalImage])
-
-  useEffect(() => {
-    if (!originalImageData) return
-
-    if (!edgeDetectorRef.current) {
-      edgeDetectorRef.current = new EdgeDetector()
-    }
-
-    setStatus('detecting')
-    const threshold = Math.round(sensitivity * 2.55)
-
-    edgeDetectorRef.current
-      .detect(originalImageData, threshold)
-      .then((result) => {
-        setEdgeResult(result.edgeRgba)
-      })
-      .catch((err) => {
-        setError('边缘检测失败: ' + err.message)
-      })
-  }, [originalImageData, sensitivity, detectTrigger])
-
-  useEffect(() => {
-    if (!edgeRgba || !originalImage || cropRect) return
-
-    const w = originalImage.width
-    const h = originalImage.height
-    let minX = w,
-      minY = h,
-      maxX = 0,
-      maxY = 0
-    let foundEdge = false
-
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const idx = (y * w + x) * 4
-        if (edgeRgba[idx + 3] > 0) {
-          foundEdge = true
-          if (x < minX) minX = x
-          if (x > maxX) maxX = x
-          if (y < minY) minY = y
-          if (y > maxY) maxY = y
-        }
-      }
-    }
-
-    if (!foundEdge) {
-      const margin = 0.1
-      setCropRect({
-        x: Math.round(w * margin),
-        y: Math.round(h * margin),
-        width: Math.round(w * (1 - 2 * margin)),
-        height: Math.round(h * (1 - 2 * margin)),
-      })
-    } else {
-      const padX = Math.round((maxX - minX) * 0.1)
-      const padY = Math.round((maxY - minY) * 0.1)
-      setCropRect({
-        x: Math.max(0, minX - padX),
-        y: Math.max(0, minY - padY),
-        width: Math.min(w - Math.max(0, minX - padX), maxX - minX + padX * 2),
-        height: Math.min(h - Math.max(0, minY - padY), maxY - minY + padY * 2),
-      })
-    }
-  }, [edgeRgba, originalImage])
-
-  useEffect(() => {
-    return () => {
-      edgeDetectorRef.current?.destroy()
-    }
-  }, [])
+  }, [activeImage?.imageElement])
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas || !originalImage) return
+    if (!canvas || !activeImage?.imageElement) return
 
     const ctx = canvas.getContext('2d')!
     const container = containerRef.current!
@@ -184,26 +103,26 @@ export default function CanvasViewer() {
     ctx.fillStyle = '#0D0D0D'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-    const displayW = originalImage.width * displayScale
-    const displayH = originalImage.height * displayScale
-    ctx.drawImage(originalImage, imageOffset.x, imageOffset.y, displayW, displayH)
+    const displayW = activeImage.imageElement.width * displayScale
+    const displayH = activeImage.imageElement.height * displayScale
+    ctx.drawImage(activeImage.imageElement, imageOffset.x, imageOffset.y, displayW, displayH)
 
-    if (showEdges && edgeRgba && originalImageData) {
+    if (activeImage.showEdges && activeImage.edgeRgba && activeImage.originalImageData) {
       const edgeCanvas = document.createElement('canvas')
-      edgeCanvas.width = originalImageData.width
-      edgeCanvas.height = originalImageData.height
+      edgeCanvas.width = activeImage.originalImageData.width
+      edgeCanvas.height = activeImage.originalImageData.height
       const edgeCtx = edgeCanvas.getContext('2d')!
       const edgeImageData = new ImageData(
-        new Uint8ClampedArray(edgeRgba),
-        originalImageData.width,
-        originalImageData.height,
+        new Uint8ClampedArray(activeImage.edgeRgba),
+        activeImage.originalImageData.width,
+        activeImage.originalImageData.height,
       )
       edgeCtx.putImageData(edgeImageData, 0, 0)
       ctx.drawImage(edgeCanvas, imageOffset.x, imageOffset.y, displayW, displayH)
     }
 
-    if (cropRect) {
-      const displayCrop = toDisplayRect(cropRect)
+    if (activeImage.cropRect) {
+      const displayCrop = toDisplayRect(activeImage.cropRect)
 
       ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'
       ctx.fillRect(imageOffset.x, imageOffset.y, displayW, displayCrop.y - imageOffset.y)
@@ -247,11 +166,11 @@ export default function CanvasViewer() {
         ctx.stroke()
       }
     }
-  }, [originalImage, edgeRgba, cropRect, showEdges, displayScale, imageOffset])
+  }, [activeImage, displayScale, imageOffset])
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      if (!cropRect || status === 'detecting' || status === 'matting') return
+      if (!activeImage?.cropRect || activeImage.status === 'detecting' || activeImage.status === 'matting') return
 
       const rect = canvasRef.current?.getBoundingClientRect()
       if (!rect) return
@@ -263,16 +182,16 @@ export default function CanvasViewer() {
       if (mode !== 'none') {
         setDragMode(mode)
         setDragStart({ x: displayX, y: displayY })
-        setDragStartRect({ ...cropRect })
+        setDragStartRect({ ...activeImage.cropRect })
         e.preventDefault()
       }
     },
-    [cropRect, status],
+    [activeImage?.cropRect, activeImage?.status],
   )
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
-      if (!cropRect || !dragStartRect) return
+      if (!activeImage?.cropRect || !dragStartRect) return
 
       const rect = canvasRef.current?.getBoundingClientRect()
       if (!rect) return
@@ -285,13 +204,13 @@ export default function CanvasViewer() {
       if (dragMode === 'move') {
         const newX = Math.max(
           0,
-          Math.min(originalImage!.width - dragStartRect.width, dragStartRect.x + dx),
+          Math.min(activeImage.imageElement!.width - dragStartRect.width, dragStartRect.x + dx),
         )
         const newY = Math.max(
           0,
-          Math.min(originalImage!.height - dragStartRect.height, dragStartRect.y + dy),
+          Math.min(activeImage.imageElement!.height - dragStartRect.height, dragStartRect.y + dy),
         )
-        setCropRect({ ...dragStartRect, x: newX, y: newY })
+        setCropRect(activeImage.id, { ...dragStartRect, x: newX, y: newY })
       } else {
         let { x, y, width, height } = dragStartRect
         const minSize = 30
@@ -302,7 +221,7 @@ export default function CanvasViewer() {
           x = newX
         }
         if (dragMode.includes('e')) {
-          width = Math.max(minSize, Math.min(originalImage!.width - x, width + dx))
+          width = Math.max(minSize, Math.min(activeImage.imageElement!.width - x, width + dx))
         }
         if (dragMode.includes('n')) {
           const newY = Math.max(0, y + dy)
@@ -310,15 +229,15 @@ export default function CanvasViewer() {
           y = newY
         }
         if (dragMode.includes('s')) {
-          height = Math.max(minSize, Math.min(originalImage!.height - y, height + dy))
+          height = Math.max(minSize, Math.min(activeImage.imageElement!.height - y, height + dy))
         }
 
         if (width >= minSize && height >= minSize) {
-          setCropRect({ x, y, width, height })
+          setCropRect(activeImage.id, { x, y, width, height })
         }
       }
     },
-    [cropRect, dragMode, dragStart, dragStartRect, displayScale, originalImage],
+    [activeImage, dragMode, dragStart, dragStartRect, displayScale],
   )
 
   const handleMouseUp = useCallback(() => {
@@ -350,10 +269,10 @@ export default function CanvasViewer() {
       const displayY = e.clientY - rect.top
       setHoverMode(getHandleAtPoint(displayX, displayY))
     },
-    [dragMode, cropRect],
+    [dragMode, activeImage?.cropRect],
   )
 
-  if (!originalImage) return null
+  if (!activeImage?.imageElement) return null
 
   return (
     <div ref={containerRef} className="relative w-full h-full overflow-hidden">
@@ -370,7 +289,7 @@ export default function CanvasViewer() {
         onMouseLeave={handleMouseUp}
       />
 
-      {status === 'detecting' && (
+      {activeImage.status === 'detecting' && (
         <div className="absolute inset-0 flex items-center justify-center bg-brand-bg/60">
           <div className="flex items-center gap-3 text-brand-accent">
             <div className="w-5 h-5 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" />

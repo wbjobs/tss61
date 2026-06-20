@@ -1,7 +1,13 @@
 import { PNG } from 'pngjs'
+import PQueue from 'p-queue'
 
 class MattingService {
   onnxReady = false
+  private queue: PQueue
+
+  constructor() {
+    this.queue = new PQueue({ concurrency: 4 })
+  }
 
   get isOnnxReady(): boolean {
     return this.onnxReady
@@ -78,6 +84,18 @@ class MattingService {
       const b = data[idx + 2]
       borderBrightness.push(0.299 * r + 0.587 * g + 0.114 * b)
       borderColors.push([r, g, b])
+    }
+  }
+
+  async processImageConcurrent(imageBuffer: Buffer): Promise<Buffer> {
+    return this.queue.add(() => this.processImage(imageBuffer))
+  }
+
+  getQueueStatus(): { pending: number; active: number; concurrency: number } {
+    return {
+      pending: this.queue.pending,
+      active: this.queue.size,
+      concurrency: this.queue.concurrency,
     }
   }
 }
